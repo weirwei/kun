@@ -320,7 +320,12 @@ func (g *Generator) generateCron(data *ifacetool.Data, spec *openapi.Specificati
 
 func (g *Generator) parseInterface(srcFilename, interfaceName string) (*ifacetool.Data, error) {
 	pkgName := ""
-	if !g.opts.FlatLayout {
+
+	// Check if output directory differs from source directory
+	srcDir, _ := filepath.Abs(filepath.Dir(srcFilename))
+	outDir, _ := filepath.Abs(g.opts.OutDir)
+
+	if !g.opts.FlatLayout || srcDir != outDir {
 		// Non-empty pkgName makes all type names used in the interface full-qualified.
 		pkgName = "x"
 	}

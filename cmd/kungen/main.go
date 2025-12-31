@@ -9,10 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/RussellLuo/kun/gen"
 	"github.com/RussellLuo/kun/gen/util/annotation"
 )
+
+var version = "1.0.0-weir"
 
 type userFlags struct {
 	outDir        string
@@ -21,11 +24,32 @@ type userFlags struct {
 	snakeCase     bool
 	enableTracing bool
 	force         bool
+	showVersion   bool
 
 	args []string
 }
 
 func main() {
+	// Check for subcommands first
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "init":
+			if err := runInit(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				fmt.Println("\nUsage: kungen init [flags] <filename> <interface-name>")
+				fmt.Println("  -http    generate HTTP example method (default)")
+				fmt.Println("  -grpc    generate gRPC example method")
+				fmt.Println("  -event   generate Event example method")
+				fmt.Println("  -cron    generate Cron example method")
+				os.Exit(1)
+			}
+			return
+		case "-v", "--version":
+			fmt.Printf("kungen version %s\n", version)
+			return
+		}
+	}
+
 	var flags userFlags
 	flag.StringVar(&flags.outDir, "out", ".", "output directory")
 	flag.BoolVar(&flags.flatLayout, "flat", true, "whether to use flat layout")
@@ -33,13 +57,21 @@ func main() {
 	flag.BoolVar(&flags.snakeCase, "snake", true, "whether to use snake-case for default names")
 	flag.BoolVar(&flags.enableTracing, "trace", false, "whether to enable tracing")
 	flag.BoolVar(&flags.force, "force", false, "whether to remove previously generated files before generating new ones")
+	flag.BoolVar(&flags.showVersion, "v", false, "show version")
 
 	flag.Usage = func() {
-		fmt.Println(`kungen [flags] source-file interface-name`)
+		fmt.Println(`kungen [flags] source-file interface-name
+kungen init [flags] <filename> <interface-name>`)
 		flag.PrintDefaults()
 	}
 
 	flag.Parse()
+
+	if flags.showVersion {
+		fmt.Printf("kungen version %s\n", version)
+		return
+	}
+
 	flags.args = flag.Args()
 
 	if err := run(flags); err != nil {
@@ -128,3 +160,210 @@ func removeGeneratedFiles(dir string) error {
 		return nil
 	})
 }
+
+// runInit handles the "init" subcommand to generate a service template file.
+func runInit(args []string) error {
+	initFlags := flag.NewFlagSet("init", flag.ExitOnError)
+	httpMode := initFlags.Bool("http", false, "generate HTTP example method")
+	grpcMode := initFlags.Bool("grpc", false, "generate gRPC example method")
+	eventMode := initFlags.Bool("event", false, "generate Event example method")
+	cronMode := initFlags.Bool("cron", false, "generate Cron example method")
+
+	if err := initFlags.Parse(args); err != nil {
+		return err
+	}
+
+	remainingArgs := initFlags.Args()
+	if len(remainingArgs) != 2 {
+		return errors.New("need 2 arguments: <filename> <interface-name>")
+	}
+
+	filename, interfaceName := remainingArgs[0], remainingArgs[1]
+
+	// Ensure filename ends with .go
+	if !strings.HasSuffix(filename, ".go") {
+		filename += ".go"
+	}
+
+	// Check if file already exists
+	if _, err := os.Stat(filename); err == nil {
+		return fmt.Errorf("file %s already exists", filename)
+	}
+
+	// Determine package name from directory
+	dir := filepath.Dir(filename)
+	if dir == "" || dir == "." {
+		dir, _ = os.Getwd()
+	}
+	pkgName := filepath.Base(dir)
+
+	// Determine transport type (default to HTTP)
+	transportType := "http"
+	if *grpcMode {
+		transportType = "grpc"
+	} else if *eventMode {
+		transportType = "event"
+	} else if *cronMode {
+		transportType = "cron"
+	} else if *httpMode {
+		transportType = "http"
+	}
+
+	// Generate the service file
+	data := serviceTemplateData{
+		PkgName:       pkgName,
+		Filename:      filepath.Base(filename),
+		InterfaceName: interfaceName,
+		Transport:     transportType,
+	}
+
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	tmpl, err := template.New("service").Parse(serviceTemplate)
+	if err != nil {
+		return err
+	}
+
+	if err := tmpl.Execute(f, data); err != nil {
+		return err
+	}
+
+	fmt.Printf("Created %s with interface %s\n", filename, interfaceName)
+	fmt.Printf("Next step: kungen ./%s %s\n", filepath.Base(filename), interfaceName)
+	return nil
+}
+
+type serviceTemplateData struct {
+	PkgName       string
+	Filename      string
+	InterfaceName string
+	Transport     string
+}
+
+var serviceTemplate = `package {{.PkgName}}
+
+import (
+	"context"
+)
+
+//go:generate kungen -force ./{{.Filename}} {{.InterfaceName}}
+
+// {{.InterfaceName}} defines the service interface.
+//
+{{- if eq .Transport "http"}}
+//kun:oas title={{.InterfaceName}}
+//kun:oas version=1.0.0
+//kun:oas basePath=/api/v1
+//kun:oas tags={{.PkgName}}
+{{- end}}
+type {{.InterfaceName}} interface {
+{{- if eq .Transport "http"}}
+	// CreateUser creates a new user.
+	//kun:op POST /users
+	//kun:body user
+	//kun:success statusCode=201
+	CreateUser(ctx context.Context, user *User) (id string, err error)
+
+	// GetUser returns a user by ID.
+	//kun:op GET /users/{id}
+	//kun:param id in=path required=true
+	GetUser(ctx context.Context, id string) (user *User, err error)
+
+	// ListUsers returns a list of users with pagination.
+	//kun:op GET /users
+	//kun:param page in=query required=false
+	//kun:param pageSize in=query name=page_size required=false
+	ListUsers(ctx context.Context, page int, pageSize int) (users []*User, total int, err error)
+
+	// UpdateUser updates an existing user.
+	//kun:op PUT /users/{id}
+	//kun:param id in=path required=true
+	//kun:body user
+	UpdateUser(ctx context.Context, id string, user *User) (err error)
+
+	// DeleteUser deletes a user by ID.
+	//kun:op DELETE /users/{id}
+	//kun:param id in=path required=true
+	//kun:success statusCode=204
+	DeleteUser(ctx context.Context, id string) (err error)
+{{- else if eq .Transport "grpc"}}
+	// SayHello is an example gRPC method.
+	//kun:grpc
+	SayHello(ctx context.Context, name string) (message string, err error)
+{{- else if eq .Transport "event"}}
+	// OnUserCreated is an example event handler.
+	//kun:event type=user_created
+	OnUserCreated(ctx context.Context, userID string) (err error)
+{{- else if eq .Transport "cron"}}
+	// CleanupExpiredData is an example cron job.
+	//kun:cron expr='@every 1h'
+	CleanupExpiredData(ctx context.Context) (err error)
+{{- end}}
+}
+
+{{- if eq .Transport "http"}}
+// User represents a user entity.
+type User struct {
+	ID    string ` + "`" + `json:"id" kun:"descr=用户唯一标识"` + "`" + `
+	Name  string ` + "`" + `json:"name" kun:"descr=用户名称 required=true"` + "`" + `
+	Email string ` + "`" + `json:"email" kun:"descr=用户邮箱"` + "`" + `
+}
+{{- end}}
+
+// {{.InterfaceName}}Impl is the implementation of {{.InterfaceName}}.
+type {{.InterfaceName}}Impl struct{}
+
+// New{{.InterfaceName}} creates a new {{.InterfaceName}} instance.
+func New{{.InterfaceName}}() {{.InterfaceName}} {
+	return &{{.InterfaceName}}Impl{}
+}
+
+{{- if eq .Transport "http"}}
+
+func (s *{{.InterfaceName}}Impl) CreateUser(ctx context.Context, user *User) (string, error) {
+	// TODO: implement create user logic
+	return "generated-id", nil
+}
+
+func (s *{{.InterfaceName}}Impl) GetUser(ctx context.Context, id string) (*User, error) {
+	// TODO: implement get user logic
+	return &User{ID: id, Name: "example", Email: "example@example.com"}, nil
+}
+
+func (s *{{.InterfaceName}}Impl) ListUsers(ctx context.Context, page int, pageSize int) ([]*User, int, error) {
+	// TODO: implement list users logic
+	return []*User{}, 0, nil
+}
+
+func (s *{{.InterfaceName}}Impl) UpdateUser(ctx context.Context, id string, user *User) error {
+	// TODO: implement update user logic
+	return nil
+}
+
+func (s *{{.InterfaceName}}Impl) DeleteUser(ctx context.Context, id string) error {
+	// TODO: implement delete user logic
+	return nil
+}
+{{- else if eq .Transport "grpc"}}
+
+func (s *{{.InterfaceName}}Impl) SayHello(ctx context.Context, name string) (string, error) {
+	return "Hello " + name, nil
+}
+{{- else if eq .Transport "event"}}
+
+func (s *{{.InterfaceName}}Impl) OnUserCreated(ctx context.Context, userID string) error {
+	// Handle user created event
+	return nil
+}
+{{- else if eq .Transport "cron"}}
+
+func (s *{{.InterfaceName}}Impl) CleanupExpiredData(ctx context.Context) error {
+	// Cleanup expired data
+	return nil
+}
+{{- end}}
+`

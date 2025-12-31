@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-//go:generate kungen ./service.go Service
+//go:generate kungen -force ./service.go Service
 
 // Service is used for handling events.
 type Service interface {

@@ -5,7 +5,7 @@ import (
 	"log"
 )
 
-//go:generate kungen ./service.go Service
+//go:generate kungen -force ./service.go Service
 
 // Service is used for handling cron jobs.
 type Service interface {
