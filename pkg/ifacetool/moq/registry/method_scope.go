@@ -77,6 +77,9 @@ func (m MethodScope) searchVar(name string) (*Var, bool) {
 // recursively. The imported packages by a single type can be more than
 // one (ex: map[a.Type]b.Type).
 func (m MethodScope) populateImports(t types.Type, imports map[string]*Package) {
+	// Handle type aliases (Go 1.22+): unwrap the alias to get the underlying type
+	t = types.Unalias(t)
+
 	switch t := t.(type) {
 	case *types.Named:
 		if pkg := t.Obj().Pkg(); pkg != nil {
