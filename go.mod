@@ -1,4 +1,4 @@
-module github.com/weirwei/kun
+module github.com/RussellLuo/kun
 
 go 1.24.0
 
